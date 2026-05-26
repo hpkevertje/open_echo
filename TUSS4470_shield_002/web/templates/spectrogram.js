@@ -19,6 +19,13 @@ let maxMeasuredDepth = 0;
 let maxValue = 0;
 let ctx, imageData;
 
+const SEDIMENT_COLORS = {
+    hard:    "#4fc3f7",   // light blue
+    mixed:   "#ffb74d",   // amber
+    soft:    "#a5d6a7",   // green
+    unknown: "#9e9e9e",   // grey
+};
+
 class RunningStats {
   constructor() {
     this.n = 0;
@@ -250,6 +257,7 @@ ws.onmessage = (event) => {
     updateSampleResolution(data.resolution);
     updateYRange();
     insertColumn(data.spectrogram, data.measured_depth);
+    updateSediment(data);   
 };
 ws.onerror = (e) => console.error('WebSocket error:', e);
 ws.onclose = () => console.warn('WebSocket closed');
@@ -304,6 +312,38 @@ function updateAxisLabels(depth) {
         tick.style.top = `${yPx}px`;
         yTicks.appendChild(tick);
     }
+}
+
+function updateSediment(data) {
+    const box   = document.getElementById("sediment-box");
+    const s = data.sediment;
+    if (!s) { box.style.display = "none"; return; }
+ 
+    box.style.display = "block";
+ 
+    // Label + confidence badge
+    const color = SEDIMENT_COLORS[s.hardness_label] ?? "#fff";
+    document.getElementById("sediment-label").innerHTML =
+        `<span style="color:${color}; font-weight:bold">
+            ${s.hardness_label.toUpperCase()}
+         </span>
+         <span style="color:#888; font-size:10px"> [${s.confidence}]</span>`;
+ 
+    // Reflection coefficients
+    if (s.mean_reflection_coefficient !== null) {
+        const rVals = s.reflection_coefficients
+            .map(r => r.toFixed(2))
+            .join(" → ");
+        document.getElementById("sediment-r").textContent =
+            `R: ${rVals}  (mean ${s.mean_reflection_coefficient.toFixed(2)})`;
+    } else {
+        document.getElementById("sediment-r").textContent = "R: n/a";
+    }
+ 
+    // Multiples found summary  e.g. "Multiples: ✓ ✗ ✓"
+    const ticks = s.multiple_found.map(f => f ? "✓" : "✗").join("  ");
+    document.getElementById("sediment-desc").textContent =
+        `Multiples: ${ticks}`;
 }
 
 // --- Zoom controls ---

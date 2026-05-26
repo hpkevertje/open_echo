@@ -7,6 +7,7 @@ import serial.tools.list_ports
 import struct
 import logging
 import serial_asyncio_fast as aserial
+from sediment_analyzer import analyze as analyze_sediment
 
 
 log = logging.getLogger("uvicorn")
@@ -187,6 +188,16 @@ class EchoReader:
 
             resolution = self.settings.resolution
             depth = depth_index * (resolution / 100)  # Convert to meters
+            try:
+                sediment = analyze_sediment(
+                    samples=values,
+                    primary_depth_index=int(depth_index),
+                    num_multiples=3,          # search for 2×, 3×, 4× echoes
+                ).to_dict()
+            except Exception as e:
+                log.warning(f"Sediment analysis failed: {e}")
+                sediment = None
+            
             try:
                 data = {
                     "spectrogram": values.tolist(),
