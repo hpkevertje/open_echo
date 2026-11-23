@@ -16,6 +16,9 @@ let metersPerRow = sample_resolution / 100;
 let ySamples = Math.max(1, Math.floor(yRange / metersPerRow));
 let measuredDepth = 0;
 let maxMeasuredDepth = 0;
+let lastDepth = null;
+let lastDepthValid = false;
+let lastDepthHeld = false;
 let maxValue = 0;
 let ctx, imageData;
 
@@ -196,7 +199,11 @@ let sum = 0;
 let count = 0;
 let diff_squared = 0;
 
-function insertColumn(values, depth) {
+function insertColumn(values, depth, depthValid = true, depthHeld = false) {
+    lastDepth = Number.isFinite(depth) ? depth : null;
+    lastDepthValid = depthValid;
+    lastDepthHeld = depthHeld;
+
     // Compute mean and std for automatic gain adjustment
     const valid = values.filter(v => typeof v === 'number');
     if (valid.length > 0) {
@@ -210,7 +217,7 @@ function insertColumn(values, depth) {
         const [r, g, b] = getColor(value);
         const i = (y * width + x) * 4;
         const sampleDepth = sampleIdxToDepth(sampleIdx);
-        if (Math.abs(depth - sampleDepth) < metersPerRow * 1.5) {
+        if (lastDepth !== null && Math.abs(lastDepth - sampleDepth) < metersPerRow * 1.5) {
             imageData.data[i] = 255;
             imageData.data[i + 1] = 0;
             imageData.data[i + 2] = 0;
@@ -223,7 +230,7 @@ function insertColumn(values, depth) {
         }
     }
     ctx.putImageData(imageData, 0, 0);
-    updateAxisLabels(depth);
+    updateAxisLabels();
 }
 
 // --- WebSocket connection and events ---
@@ -251,12 +258,17 @@ const ws = new WebSocket('ws://' + window.location.host + '/ws');
 ws.onmessage = (event) => {
     // updateSampleRate();
     const data = JSON.parse(event.data);
-    if (data.measured_depth > maxMeasuredDepth) {
+    if (Number.isFinite(data.measured_depth) && data.measured_depth > maxMeasuredDepth) {
         maxMeasuredDepth = data.measured_depth;
     }
     updateSampleResolution(data.resolution);
     updateYRange();
-    insertColumn(data.spectrogram, data.measured_depth);
+    insertColumn(
+        data.spectrogram,
+        data.measured_depth,
+        data.depth_valid !== false,
+        data.depth_held === true
+    );
 
     if (data.sediment) {
         latestSediment = data.sediment;
@@ -283,9 +295,26 @@ function updateYRangeLabel() {
 }
 
 // --- Axis label rendering ---
-function updateAxisLabels(depth) {
+function updateAxisLabels() {
     const measuredDepthLabel = document.getElementById('measured-depth-label');
-    measuredDepthLabel.childNodes[0].nodeValue = 'Depth: ' + depth.toFixed(2) + 'm';
+    const depthStatus = document.getElementById('depth-status');
+
+    if (lastDepth === null) {
+        measuredDepthLabel.childNodes[0].nodeValue = 'Depth: --';
+        depthStatus.textContent = 'NO BOTTOM';
+        depthStatus.style.color = '#c62828';
+        depthStatus.style.display = 'block';
+    } else {
+        measuredDepthLabel.childNodes[0].nodeValue = 'Depth: ' + lastDepth.toFixed(2) + 'm';
+        if (lastDepthHeld || !lastDepthValid) {
+            depthStatus.textContent = 'HOLD';
+            depthStatus.style.color = '#b26a00';
+            depthStatus.style.display = 'block';
+        } else {
+            depthStatus.textContent = '';
+            depthStatus.style.display = 'none';
+        }
+    }
     // const numXTicks = 5;
     // xTicks.innerHTML = '';
     // // Calculate seconds per tick based on smoothed sample rate and canvas width

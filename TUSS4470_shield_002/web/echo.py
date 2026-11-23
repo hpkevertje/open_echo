@@ -7,6 +7,7 @@ import serial.tools.list_ports
 import struct
 import logging
 import serial_asyncio_fast as aserial
+from depth_tracker import DepthTracker
 from sediment_analyzer import SoilFilter, analyze as analyze_sediment
 
 
@@ -165,11 +166,14 @@ class EchoReader:
         self.depth_callback = depth_callback
         self.sediment_callback = sediment_callback
         self._soil_filter = SoilFilter()
+        self._depth_tracker = DepthTracker()
         self._task: asyncio.Task | None = None
 
     def update_settings(self, new_settings):
         log.info("EchoReader updating settings...")
         self.settings = new_settings
+        self._soil_filter.reset()
+        self._depth_tracker.reset()
         self._restart_event.set()  # Signal restart
 
     def __enter__(self):
@@ -190,22 +194,38 @@ class EchoReader:
             values, depth_index, temperature, drive_voltage = result
 
             resolution = self.settings.resolution
-            depth = depth_index * (resolution / 100)  # Convert to meters
+            depth_result = self._depth_tracker.update(
+                samples=values,
+                firmware_index=int(depth_index),
+                resolution_cm_per_sample=resolution,
+            )
+            depth = depth_result.depth
+
+            analysis_index = (
+                depth_result.index
+                if depth_result.index is not None
+                else int(depth_index)
+            )
             try:
                 sediment_result = analyze_sediment(
                     samples=values,
-                    primary_depth_index=int(depth_index),
+                    primary_depth_index=int(analysis_index),
                     num_multiples=3,          # search for 2×, 3×, 4× echoes
                 )
                 sediment = self._soil_filter.update(sediment_result).to_dict()
             except Exception as e:
                 log.warning(f"Sediment analysis failed: {e}")
                 sediment = None
-            
+
             try:
                 data = {
                     "spectrogram": values.tolist(),
                     "measured_depth": depth,
+                    "depth_index": depth_result.index,
+                    "depth_valid": depth_result.valid,
+                    "depth_held": depth_result.held,
+                    "depth_confidence": depth_result.confidence,
+                    "depth_echo_db": depth_result.echo_db,
                     "temperature": temperature,
                     "drive_voltage": drive_voltage,
                     "resolution": resolution,
@@ -216,6 +236,7 @@ class EchoReader:
                 log.error(f"Error sending data: {e}", exc_info=e)
 
             try:
+                # None tells the outputs to stop sending a stale depth.
                 self.depth_callback(depth)
             except Exception as e:
                 log.error(f"Error sending depth: {e}", exc_info=e)

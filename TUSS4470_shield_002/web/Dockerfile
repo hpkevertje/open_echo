@@ -11,7 +11,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py depth_output.py echo.py sediment_analyzer.py settings.py ./
+COPY app.py depth_output.py echo.py depth_tracker.py sediment_analyzer.py settings.py ./
 COPY templates ./templates
 COPY static ./static
 
