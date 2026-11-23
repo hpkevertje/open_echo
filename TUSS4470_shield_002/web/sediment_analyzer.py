@@ -1,97 +1,130 @@
 """
 sediment_analyzer.py
 --------------------
-Detects multiple echo returns in a single OpenEcho ping and estimates
-sediment / bottom hardness from the decay of successive reflections.
+Estimates bottom hardness / sediment type from the *second* bottom echo
+(the "secondary ring") in a single OpenEcho ping.
 
-How multiple echoes work
-------------------------
-After the pulse hits the bottom it bounces back to the surface, then
-reflects down again and hits the bottom a second time, etc.  In still
-water each multiple arrives at almost exactly 2×, 3×, 4× the travel
-time of the primary return, so their sample indices are:
+How it works
+------------
+After the pulse hits the bottom it bounces back to the transducer, reflects
+at the water surface, and hits the bottom a second time.  In still water the
+second echo arrives at almost exactly twice the travel time of the primary
+return, so its sample index is:
 
-    idx_n  ≈  primary_idx × n          (n = 2, 3, 4 …)
+    idx_2  ~=  2 * primary_idx
 
-The amplitude of each multiple relative to the previous one (the
-"reflection coefficient") tells us about the acoustic impedance
-contrast at the sediment interface:
+The amplitude ratio of the two echoes is the pressure reflection coefficient
+of the bottom (R).  For higher multiples n = 2, 3, 4 ...:
 
-    R  =  A_n+1 / A_n
+    A_n / A_1 = R^(n-1) * R_s^(n-1) / n^2
 
-    R > 0.55  →  hard   (rock, gravel, coarse sand)
-    R > 0.30  →  mixed  (compacted silt, fine sand)
-    R ≤ 0.30  →  soft   (mud, fluid silt, organic sediment)
+where R_s is the water-surface reflection coefficient (approximately 1).
+Solving for R in dB:
 
-These thresholds are empirically reasonable for a TUSS4470-class
-single-beam sounder; they may need tuning for your specific transducer
-and frequency.
+    20*log10(R) = (A_n_dB - A_1_dB + 40*log10(n)) / (n - 1)
+
+The +40*log10(n) term compensates the extra two-way spherical spreading of
+the longer path (12.04 dB for n = 2, 19.08 dB for n = 3, ...).
+
+IMPORTANT: the OpenEcho payload is `ADC >> 2/4` of the TUSS4470 VOUT, and
+VOUT is a *logarithmic* envelope, not a linear amplitude.  On the 5 V
+Arduino boards (Uno R3/R4) one 8-bit count is 4 ADC LSB = 19.53 mV, and the
+datasheet slope with VOUT_SCALE_SEL = 0 is 29.7 mV/dB, so:
+
+    1 count  ~=  0.658 dB
+
+Do NOT compute R as (raw_peak_2 / raw_peak_1) - that treats dB as a linear
+amplitude and gives completely wrong soil types.  The code below converts
+each sample to dB above the noise floor first.
+
+Classification thresholds are empirical and intended as a starting point.
+Calibrate them for your transducer / installation by logging R over known
+mud, sand and rock bottoms.
 
 Usage
 -----
     from sediment_analyzer import analyze
 
     result = analyze(samples_array, primary_depth_index, num_multiples=3)
-    # result is a dict – see return value docs below.
+    # result is a dataclass - call .to_dict() for JSON serialisation.
 """
 
-import numpy as np
-from dataclasses import dataclass, asdict
+import math
+from collections import deque
+from dataclasses import asdict, dataclass
 from typing import Optional
 
+import numpy as np
 
-# ── tuneable constants ────────────────────────────────────────────────────────
 
-# Half-width (in samples) of the search window centred on each expected multiple
+# -- tuneable constants -------------------------------------------------------
+
+# dB per raw 8-bit count.  0.658 for 5 V Arduino (Uno R3/R4, VOUT_SCALE_SEL=0).
+# Use ~0.434 for a 3.3 V ADC reference, or calibrate against a known target.
+DB_PER_COUNT: float = 0.658
+
+# Two-way spherical spreading correction for the extra path of the 2nd echo
+SPREADING_CORRECTION_DB: float = 40.0 * math.log10(2.0)  # 12.04 dB
+
+# Half-width (in samples) of the search window around each expected echo
 SEARCH_HALF_WINDOW: int = 15
 
-# Minimum peak amplitude (0-255) for a multiple to be considered valid
-MIN_PEAK_AMPLITUDE: int = 10
+# Minimum second-echo level above the noise floor to be considered valid (dB)
+MIN_ECHO_SNR_DB: float = 3.0
 
-# Reflection-coefficient thresholds  (ratio of successive peak amplitudes)
-THRESHOLD_HARD: float = 0.55
-THRESHOLD_MIXED: float = 0.30
+# Smoothing kernel width (samples) applied to the linearised envelope
+SMOOTH_KERNEL: int = 5
 
-# Smoothing kernel width applied to raw samples before peak search
-SMOOTH_KERNEL: int = 3
+# Reflection-coefficient thresholds (20*log10(R), dB)
+THRESHOLD_HARD_DB: float = -10.0
+THRESHOLD_MIXED_DB: float = -18.0
 
 
-# ── data class ────────────────────────────────────────────────────────────────
+# -- data class ---------------------------------------------------------------
 
 @dataclass
 class SedimentResult:
     """All outputs from one ping analysis."""
 
     # Primary bottom
-    primary_index: int          # sample index of primary bottom return
-    primary_amplitude: float    # smoothed amplitude at primary index  (0-255)
+    primary_index: int              # sample index of primary bottom return
+    primary_amplitude: float        # level above noise floor (dB)
 
-    # Multiples
-    multiple_indices: list      # detected sample indices  [idx_2, idx_3, …]
-    multiple_amplitudes: list   # smoothed amplitudes at those indices
-    multiple_found: list        # bool – was a valid peak found at each harmonic?
+    # Multiples (2x, 3x, 4x ...)
+    multiple_indices: list          # detected sample indices
+    multiple_amplitudes: list       # level above noise floor (dB)
+    multiple_found: list            # bool - valid echo at this multiple?
 
     # Derived metrics
-    reflection_coefficients: list   # R_n = A_(n+1) / A_n  (between successive peaks)
-    mean_reflection_coefficient: Optional[float]  # average over valid pairs
+    reflection_coefficients: list   # linear R estimates from each valid multiple
+    mean_reflection_coefficient: Optional[float]  # mean of the above
+    reflection_db: Optional[float]  # mean R in dB (20*log10(R))
+    snr_db: Optional[float]         # 2nd echo level above noise (dB)
 
     # Classification
-    hardness_label: str         # "hard" | "mixed" | "soft" | "unknown"
-    confidence: str             # "high" | "medium" | "low"
-    description: str            # human-readable one-liner
+    hardness_label: str             # "hard" | "mixed" | "soft" | "unknown"
+    soil_type: str                  # readable soil / bottom type
+    soil_class: int                 # 0 rock .. 4 mud, 9 unknown
+    confidence: str                 # "high" | "medium" | "low"
+    description: str                # human-readable one-liner
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-# ── helpers ───────────────────────────────────────────────────────────────────
+# -- helpers ------------------------------------------------------------------
 
-def _smooth(samples: np.ndarray, kernel: int) -> np.ndarray:
+def _to_db(amplitude: float) -> float:
+    """Convert a linear amplitude (noise floor = 1.0) to dB."""
+    return 20.0 * math.log10(max(float(amplitude), 1e-12))
+
+
+def _smooth(values: np.ndarray, kernel: int) -> np.ndarray:
     """Simple box-car (moving average) smoother."""
     if kernel <= 1:
-        return samples.astype(float)
-    k = np.ones(kernel) / kernel
-    return np.convolve(samples.astype(float), k, mode="same")
+        return values.astype(float)
+    k = np.ones(kernel, dtype=float) / kernel
+    return np.convolve(values.astype(float), k, mode="same")
 
 
 def _peak_in_window(
@@ -107,140 +140,268 @@ def _peak_in_window(
     hi = min(len(smoothed) - 1, centre + half_window)
     if lo >= hi:
         return centre, 0.0
-    region = smoothed[lo : hi + 1]
+    region = smoothed[lo: hi + 1]
     local_max_idx = int(np.argmax(region))
     return lo + local_max_idx, float(region[local_max_idx])
 
 
+def _unknown(primary_index: int, description: str) -> SedimentResult:
+    """Result used when there is no usable primary / secondary echo."""
+    return SedimentResult(
+        primary_index=primary_index,
+        primary_amplitude=0.0,
+        multiple_indices=[],
+        multiple_amplitudes=[],
+        multiple_found=[],
+        reflection_coefficients=[],
+        mean_reflection_coefficient=None,
+        reflection_db=None,
+        snr_db=None,
+        hardness_label="unknown",
+        soil_type="unknown",
+        soil_class=9,
+        confidence="low",
+        description=description,
+    )
+
+
 def _classify(
-    primary_amp: float,
-    multiple_found: list,
-    reflection_coefficients: list,
-    mean_r: Optional[float],
-) -> tuple[str, str, str]:
-    """Return (hardness_label, confidence, description)."""
+    mean_r_db: Optional[float],
+    snr_db: Optional[float],
+    range_limited: bool,
+    n_pings: int = 1,
+) -> tuple[str, str, int, str, str]:
+    """Return (hardness_label, soil_type, soil_class, confidence, description)."""
 
-    if mean_r is None or not any(multiple_found):
+    if mean_r_db is None:
+        if range_limited:
+            return (
+                "unknown",
+                "unknown",
+                9,
+                "low",
+                "Second echo falls outside the captured range - move to shallower "
+                "water or increase the number of samples.",
+            )
         return (
-            "unknown",
+            "soft",
+            "mud / soft silt",
+            4,
             "low",
-            "No valid multiples detected – cannot classify sediment. "
-            "Water may be too shallow or bottom too soft for multiples.",
+            "No second echo above the noise floor. This is consistent with a soft, "
+            "absorbing bottom (or a rough/steep bottom). Average several pings to confirm.",
         )
 
-    valid_multiples = sum(multiple_found)
-    confidence = "high" if valid_multiples >= 2 else "medium" if valid_multiples == 1 else "low"
-
-    if mean_r >= THRESHOLD_HARD:
-        label = "hard"
-        desc = (
-            f"Hard bottom (rock / gravel / coarse sand). "
-            f"Mean reflection coefficient R={mean_r:.2f} – strong multiples indicate "
-            f"high acoustic impedance contrast."
-        )
-    elif mean_r >= THRESHOLD_MIXED:
-        label = "mixed"
-        desc = (
-            f"Mixed / compacted sediment (fine sand / compacted silt). "
-            f"Mean reflection coefficient R={mean_r:.2f} – moderate echo decay."
-        )
+    # Reflection coefficients from the literature (normal incidence, 40 kHz):
+    #   mud < 0.05 | silt 0.05-0.10 | sand 0.12-0.25 | gravel 0.27-0.36 | rock 0.4-0.6
+    if mean_r_db >= -8.0:
+        soil_type, soil_class = "rock / hard clay", 0
+    elif mean_r_db >= -12.0:
+        soil_type, soil_class = "gravel / compacted sand", 1
+    elif mean_r_db >= -18.0:
+        soil_type, soil_class = "sand", 2
+    elif mean_r_db >= -24.0:
+        soil_type, soil_class = "silt / soft sand", 3
     else:
-        label = "soft"
-        desc = (
-            f"Soft bottom (mud / fluid silt / organic sediment). "
-            f"Mean reflection coefficient R={mean_r:.2f} – rapid echo decay "
-            f"suggests low impedance contrast / energy absorption."
+        soil_type, soil_class = "mud / weed", 4
+
+    if mean_r_db >= THRESHOLD_HARD_DB:
+        hardness = "hard"
+    elif mean_r_db >= THRESHOLD_MIXED_DB:
+        hardness = "mixed"
+    else:
+        hardness = "soft"
+
+    if snr_db is None or snr_db < 4.0:
+        confidence = "low"
+    elif snr_db < 9.0:
+        confidence = "medium"
+    else:
+        confidence = "high"
+
+    r_lin = 10.0 ** (mean_r_db / 20.0)
+    scope = (
+        "Single-ping estimate; average 20-50 pings for a stable value."
+        if n_pings <= 1
+        else f"Median of the last {n_pings} pings."
+    )
+    description = (
+        f"{soil_type} - R={r_lin:.2f} ({mean_r_db:.1f} dB), "
+        f"second echo {snr_db:.1f} dB above noise. {scope}"
+    )
+    return hardness, soil_type, soil_class, confidence, description
+
+
+class SoilFilter:
+    """
+    Median filter over recent pings.
+
+    A single ping gives a noisy R (the second echo is only a few dB above the
+    noise floor), so the reported bottom type can jump between classes.  Keep
+    a short history and report the median reflection coefficient instead.
+    """
+
+    def __init__(self, window: int = 15):
+        self.window = max(1, int(window))
+        self._history: deque[float] = deque(maxlen=self.window)
+
+    def reset(self) -> None:
+        self._history.clear()
+
+    def update(self, result: SedimentResult) -> SedimentResult:
+        """Update the history and return the (possibly reclassified) result."""
+        if result.reflection_db is None:
+            return result
+
+        self._history.append(float(result.reflection_db))
+        if len(self._history) == 1:
+            return result
+
+        smoothed_db = float(np.median(self._history))
+        hardness, soil_type, soil_class, confidence, description = _classify(
+            smoothed_db,
+            result.snr_db,
+            range_limited=False,
+            n_pings=len(self._history),
         )
 
-    return label, confidence, desc
+        result.reflection_db = smoothed_db
+        result.mean_reflection_coefficient = 10.0 ** (smoothed_db / 20.0)
+        result.reflection_coefficients = [result.mean_reflection_coefficient]
+        result.hardness_label = hardness
+        result.soil_type = soil_type
+        result.soil_class = soil_class
+        result.confidence = confidence
+        result.description = description
+        return result
 
 
-# ── public API ────────────────────────────────────────────────────────────────
+# -- public API ---------------------------------------------------------------
 
 def analyze(
     samples: np.ndarray,
     primary_depth_index: int,
     num_multiples: int = 3,
     search_half_window: int = SEARCH_HALF_WINDOW,
-    min_peak_amplitude: int = MIN_PEAK_AMPLITUDE,
+    min_echo_snr_db: float = MIN_ECHO_SNR_DB,
+    db_per_count: float = DB_PER_COUNT,
 ) -> SedimentResult:
     """
-    Analyse a single ping for sediment type.
+    Analyse a single ping for sediment type from the second bottom echo.
 
     Parameters
     ----------
     samples : np.ndarray  (dtype uint8, shape [num_samples])
-        Raw spectrogram row from the Arduino (values 0-255).
+        Raw spectrogram row from the Arduino (values 0-255, logarithmic).
     primary_depth_index : int
         Sample index of the primary bottom return as reported by the firmware.
     num_multiples : int
-        How many multiples to search for (default 3 → looks for 2×, 3×, 4×).
+        How many multiples to search for (default 3 -> looks for 2x, 3x, 4x).
     search_half_window : int
-        ± samples around each expected multiple to search for a peak.
-    min_peak_amplitude : int
-        Minimum amplitude for a multiple to be counted as valid.
+        +/- samples around each expected multiple to search for a peak.
+    min_echo_snr_db : float
+        Minimum level above the noise floor for a multiple to count.
+    db_per_count : float
+        Log-amplifier slope in dB per raw count (see DB_PER_COUNT).
 
     Returns
     -------
     SedimentResult  (call .to_dict() for JSON serialisation)
     """
 
-    smoothed = _smooth(samples, SMOOTH_KERNEL)
-    n_samples = len(smoothed)
+    values = np.asarray(samples, dtype=float)
+    n_samples = len(values)
+    primary_index = int(primary_depth_index)
 
-    # ── primary ──────────────────────────────────────────────────────────────
-    # Trust the firmware index but re-measure amplitude on smoothed data
-    p_idx, p_amp = _peak_in_window(smoothed, primary_depth_index, search_half_window)
+    if n_samples == 0:
+        return _unknown(primary_index, "Empty sample array.")
+    if primary_index <= 0 or primary_index >= n_samples - 2:
+        return _unknown(
+            primary_index,
+            "No valid primary bottom return (depth is zero or outside the capture window).",
+        )
 
-    # ── multiples ────────────────────────────────────────────────────────────
+    # The TUSS4470 VOUT is logarithmic: convert counts -> dB above noise floor,
+    # then to linear amplitude with the noise floor normalised to 1.0.
+    noise_floor = float(np.median(values))
+    amplitude = np.power(
+        10.0,
+        (np.maximum(values - noise_floor, 0.0) * db_per_count) / 20.0,
+    )
+    smoothed = _smooth(amplitude, SMOOTH_KERNEL)
+
+    # -- primary ------------------------------------------------------------
+    p_idx, p_amp = _peak_in_window(smoothed, primary_index, search_half_window)
+    p_db = _to_db(p_amp)
+    if p_db < min_echo_snr_db:
+        return _unknown(
+            primary_index,
+            "Primary echo is below the detection threshold.",
+        )
+
+    # -- multiples ----------------------------------------------------------
     multiple_indices: list[int] = []
     multiple_amplitudes: list[float] = []
     multiple_found: list[bool] = []
+    r_estimates_db: list[float] = []
 
-    for n in range(2, 2 + num_multiples):
-        expected = primary_depth_index * n
+    for m in range(2, 2 + num_multiples):
+        expected = primary_index * m
         if expected >= n_samples:
-            # Beyond array – mark as not found and stop
             multiple_indices.append(expected)
             multiple_amplitudes.append(0.0)
             multiple_found.append(False)
             continue
 
-        peak_idx, peak_amp = _peak_in_window(smoothed, expected, search_half_window)
-        found = peak_amp >= min_peak_amplitude
+        # Allow the multiple to drift by ~2 % (boat motion, sloped bottom)
+        half = max(search_half_window, int(round(expected * 0.02)))
+        peak_idx, peak_amp = _peak_in_window(smoothed, expected, half)
+        peak_db = _to_db(peak_amp)
+        found = peak_db >= min_echo_snr_db
+
         multiple_indices.append(peak_idx)
-        multiple_amplitudes.append(peak_amp)
+        multiple_amplitudes.append(peak_db)
         multiple_found.append(found)
 
-    # ── reflection coefficients ───────────────────────────────────────────────
-    # Compare: primary → 1st multiple, 1st multiple → 2nd multiple, etc.
-    all_amps = [p_amp] + multiple_amplitudes
-    reflection_coefficients: list[float] = []
-    for i in range(len(all_amps) - 1):
-        a1 = all_amps[i]
-        a2 = all_amps[i + 1]
-        if a1 > 0 and multiple_found[i] if i < len(multiple_found) else False:
-            reflection_coefficients.append(a2 / a1)
+        if found:
+            # A_n/A_1 = R^(n-1) / n^2  ->  solve for R in dB
+            r_db = (peak_db - p_db + 40.0 * math.log10(m)) / (m - 1)
+            r_estimates_db.append(r_db)
 
-    valid_r = [
-        r
-        for r, found in zip(reflection_coefficients, multiple_found)
-        if found
-    ]
-    mean_r = float(np.mean(valid_r)) if valid_r else None
+    # -- combine ------------------------------------------------------------
+    if r_estimates_db:
+        reflection_db = float(np.mean(r_estimates_db))
+        reflection_coefficients = [
+            10.0 ** (value / 20.0) for value in r_estimates_db
+        ]
+        mean_r = float(np.mean(reflection_coefficients))
+        snr_db = multiple_amplitudes[0]
+        range_limited = False
+    else:
+        reflection_db = None
+        reflection_coefficients = []
+        mean_r = None
+        snr_db = None
+        # Was the 2nd echo even inside the captured window?
+        range_limited = (primary_index * 2) >= n_samples
 
-    # ── classify ──────────────────────────────────────────────────────────────
-    label, confidence, description = _classify(p_amp, multiple_found, reflection_coefficients, mean_r)
+    hardness, soil_type, soil_class, confidence, description = _classify(
+        reflection_db, snr_db, range_limited
+    )
 
     return SedimentResult(
         primary_index=p_idx,
-        primary_amplitude=p_amp,
+        primary_amplitude=float(p_db),
         multiple_indices=multiple_indices,
         multiple_amplitudes=multiple_amplitudes,
         multiple_found=multiple_found,
         reflection_coefficients=reflection_coefficients,
         mean_reflection_coefficient=mean_r,
-        hardness_label=label,
+        reflection_db=reflection_db,
+        snr_db=snr_db,
+        hardness_label=hardness,
+        soil_type=soil_type,
+        soil_class=soil_class,
         confidence=confidence,
         description=description,
     )

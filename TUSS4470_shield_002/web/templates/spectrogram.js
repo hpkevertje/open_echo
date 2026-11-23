@@ -315,35 +315,43 @@ function updateAxisLabels(depth) {
 }
 
 function updateSediment(data) {
-    const box   = document.getElementById("sediment-box");
+    const box = document.getElementById("sediment-box");
     const s = data.sediment;
     if (!s) { box.style.display = "none"; return; }
- 
+
     box.style.display = "block";
- 
-    // Label + confidence badge
+
+    // Soil type + confidence badge
     const color = SEDIMENT_COLORS[s.hardness_label] ?? "#fff";
-    document.getElementById("sediment-label").innerHTML =
-        `<span style="color:${color}; font-weight:bold">
-            ${s.hardness_label.toUpperCase()}
-         </span>
-         <span style="color:#888; font-size:10px"> [${s.confidence}]</span>`;
- 
-    // Reflection coefficients
-    if (s.mean_reflection_coefficient !== null) {
-        const rVals = s.reflection_coefficients
-            .map(r => r.toFixed(2))
-            .join(" → ");
+    const label = document.getElementById("sediment-label");
+    label.replaceChildren();
+
+    const typeSpan = document.createElement("span");
+    typeSpan.style.color = color;
+    typeSpan.style.fontWeight = "bold";
+    typeSpan.textContent = (s.soil_type || s.hardness_label || "unknown").toUpperCase();
+
+    const confidenceSpan = document.createElement("span");
+    confidenceSpan.style.color = "#888";
+    confidenceSpan.style.fontSize = "10px";
+    confidenceSpan.textContent = ` [${s.confidence}]`;
+
+    label.append(typeSpan, confidenceSpan);
+
+    // Reflection coefficient in linear form and dB, plus second-echo SNR
+    if (s.reflection_db !== null && s.reflection_db !== undefined) {
+        const r = s.mean_reflection_coefficient;
+        const snr = s.snr_db;
         document.getElementById("sediment-r").textContent =
-            `R: ${rVals}  (mean ${s.mean_reflection_coefficient.toFixed(2)})`;
+            `R: ${r.toFixed(2)} (${s.reflection_db.toFixed(1)} dB)` +
+            (snr !== null && snr !== undefined
+                ? `   echo SNR ${snr.toFixed(1)} dB`
+                : "");
     } else {
-        document.getElementById("sediment-r").textContent = "R: n/a";
+        document.getElementById("sediment-r").textContent = "R: n/a (no second echo)";
     }
- 
-    // Multiples found summary  e.g. "Multiples: ✓ ✗ ✓"
-    const ticks = s.multiple_found.map(f => f ? "✓" : "✗").join("  ");
-    document.getElementById("sediment-desc").textContent =
-        `Multiples: ${ticks}`;
+
+    document.getElementById("sediment-desc").textContent = s.description || "";
 }
 
 // --- Zoom controls ---

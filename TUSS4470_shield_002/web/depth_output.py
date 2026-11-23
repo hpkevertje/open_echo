@@ -11,6 +11,11 @@ from settings import NMEAOffset, Settings
 log = logging.getLogger("uvicorn")
 
 
+def _round_or_none(value, ndigits: int):
+    """Round a numeric value for SignalK, keeping None as None."""
+    return None if value is None else round(value, ndigits)
+
+
 class OutputManager:
     def __init__(self, settings: Settings | None = None):
         self._task: asyncio.Task | None = None
@@ -19,9 +24,14 @@ class OutputManager:
         self._output_classes: list[OutputMethod] = []
 
     def update(self, value: Any):
-        """Update the current value."""
+        """Update the current depth value."""
         for output_class in self._output_classes:
             output_class.update(value)
+
+    def update_sediment(self, value: Any):
+        """Update the current sediment estimate."""
+        for output_class in self._output_classes:
+            output_class.update_sediment(value)
 
     async def update_settings(self, new_settings: Settings):
         self.settings = new_settings
@@ -68,6 +78,7 @@ class OutputMethod(ABC):
     def __init__(self, settings: Settings):
         self.settings = settings
         self._current_value = None
+        self._current_sediment = None
 
     @abstractmethod
     async def start(self):
@@ -80,8 +91,12 @@ class OutputMethod(ABC):
         pass
 
     def update(self, value: Any):
-        """Update the current value."""
+        """Update the current depth value."""
         self._current_value = value
+
+    def update_sediment(self, value: Any):
+        """Update the current sediment estimate (dict or None)."""
+        self._current_sediment = value
 
     @abstractmethod
     async def output(self):
@@ -94,6 +109,7 @@ class SignalKOutput(OutputMethod):
         super().__init__(settings)
         self._ws = None
         self._access_request_ongoing = False
+        self._meta_sent = False
 
         self.settings = settings
 
@@ -107,6 +123,58 @@ class SignalKOutput(OutputMethod):
 
         ws_uri = f"ws://{uri}/signalk/v1/stream?subscribe=none&token={await self.get_token()}"
         self._ws = await websockets.connect(ws_uri)
+        self._meta_sent = False
+        await self.send_soil_meta()
+
+    async def send_soil_meta(self):
+        """Publish units/labels for the custom bottom-type paths (once per connection)."""
+        if self._ws is None or self._meta_sent:
+            return
+
+        meta = {
+            "updates": [
+                {
+                    "meta": [
+                        {
+                            "path": "environment.bottom.type",
+                            "value": {"displayName": "Bottom type"},
+                        },
+                        {
+                            "path": "environment.bottom.class",
+                            "value": {
+                                "displayName": "Bottom class",
+                                "description": "0 rock, 1 gravel, 2 sand, 3 silt, 4 mud, 9 unknown",
+                            },
+                        },
+                        {
+                            "path": "environment.bottom.hardness",
+                            "value": {
+                                "units": "dB",
+                                "displayName": "Bottom hardness",
+                                "description": "20*log10(R) from the second bottom echo",
+                            },
+                        },
+                        {
+                            "path": "environment.bottom.reflection",
+                            "value": {
+                                "units": "ratio",
+                                "displayName": "Bottom reflection R",
+                            },
+                        },
+                        {
+                            "path": "environment.bottom.echoSnr",
+                            "value": {
+                                "units": "dB",
+                                "displayName": "Second echo SNR",
+                            },
+                        },
+                    ]
+                }
+            ]
+        }
+        await self._ws.send(json.dumps(meta))
+        self._meta_sent = True
+        log.info("SignalK bottom-type metadata sent")
 
     async def get_token(self):
         if self._access_request_ongoing:
@@ -198,6 +266,42 @@ class SignalKOutput(OutputMethod):
                             "value": depth_m + transducer_depth - draft,
                         }
                     )
+
+            # Bottom type / hardness from the second echo.  These are custom
+            # SignalK paths (the spec has no standard bottom-type path); the
+            # metadata sent on connect gives dashboards a label and units.
+            soil = self._current_sediment
+            values.extend(
+                [
+                    {
+                        "path": "environment.bottom.type",
+                        "value": soil.get("soil_type") if soil else None,
+                    },
+                    {
+                        "path": "environment.bottom.class",
+                        "value": soil.get("soil_class") if soil else None,
+                    },
+                    {
+                        "path": "environment.bottom.hardness",
+                        "value": _round_or_none(
+                            soil.get("reflection_db") if soil else None, 2
+                        ),
+                    },
+                    {
+                        "path": "environment.bottom.reflection",
+                        "value": _round_or_none(
+                            soil.get("mean_reflection_coefficient") if soil else None,
+                            3,
+                        ),
+                    },
+                    {
+                        "path": "environment.bottom.echoSnr",
+                        "value": _round_or_none(
+                            soil.get("snr_db") if soil else None, 2
+                        ),
+                    },
+                ]
+            )
 
             delta = {"updates": [{"values": values}]}
 

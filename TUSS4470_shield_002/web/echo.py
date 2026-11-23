@@ -7,7 +7,7 @@ import serial.tools.list_ports
 import struct
 import logging
 import serial_asyncio_fast as aserial
-from sediment_analyzer import analyze as analyze_sediment
+from sediment_analyzer import SoilFilter, analyze as analyze_sediment
 
 
 log = logging.getLogger("uvicorn")
@@ -156,12 +156,15 @@ class EchoReader:
         self,
         data_callback: Callable[[dict], Coroutine],
         depth_callback: Callable[[dict], Coroutine],
+        sediment_callback: Callable[[dict | None], Coroutine] | None = None,
         settings = None,
     ):
         self.settings = settings
         self._restart_event = asyncio.Event()
         self.data_callback = data_callback
         self.depth_callback = depth_callback
+        self.sediment_callback = sediment_callback
+        self._soil_filter = SoilFilter()
         self._task: asyncio.Task | None = None
 
     def update_settings(self, new_settings):
@@ -189,11 +192,12 @@ class EchoReader:
             resolution = self.settings.resolution
             depth = depth_index * (resolution / 100)  # Convert to meters
             try:
-                sediment = analyze_sediment(
+                sediment_result = analyze_sediment(
                     samples=values,
                     primary_depth_index=int(depth_index),
                     num_multiples=3,          # search for 2×, 3×, 4× echoes
-                ).to_dict()
+                )
+                sediment = self._soil_filter.update(sediment_result).to_dict()
             except Exception as e:
                 log.warning(f"Sediment analysis failed: {e}")
                 sediment = None
@@ -205,6 +209,7 @@ class EchoReader:
                     "temperature": temperature,
                     "drive_voltage": drive_voltage,
                     "resolution": resolution,
+                    "sediment": sediment,
                 }
                 await self.data_callback(data)
             except Exception as e:
@@ -214,6 +219,12 @@ class EchoReader:
                 self.depth_callback(depth)
             except Exception as e:
                 log.error(f"Error sending depth: {e}", exc_info=e)
+
+            if self.sediment_callback is not None:
+                try:
+                    self.sediment_callback(sediment)
+                except Exception as e:
+                    log.error(f"Error sending sediment estimate: {e}", exc_info=e)
 
         await asyncio.sleep(0.1)  # Allow time for other tasks
 

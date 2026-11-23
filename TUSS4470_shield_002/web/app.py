@@ -34,6 +34,7 @@ output_manager = OutputManager()
 echo_reader = EchoReader(
     data_callback=connection_manager.broadcast_json,
     depth_callback=output_manager.update,
+    sediment_callback=output_manager.update_sediment,
 )
 
 
