@@ -271,33 +271,40 @@ class SignalKOutput(OutputMethod):
             # SignalK paths (the spec has no standard bottom-type path); the
             # metadata sent on connect gives dashboards a label and units.
             soil = self._current_sediment
+            soil_valid = bool(soil and soil.get("measurement_valid", True))
             values.extend(
                 [
                     {
                         "path": "environment.bottom.type",
-                        "value": soil.get("soil_type") if soil else None,
+                        "value": (
+                            soil.get("soil_type")
+                            if soil_valid
+                            else ("no valid measurement" if soil else None)
+                        ),
                     },
                     {
                         "path": "environment.bottom.class",
-                        "value": soil.get("soil_class") if soil else None,
+                        "value": soil.get("soil_class") if soil_valid else None,
                     },
                     {
                         "path": "environment.bottom.hardness",
                         "value": _round_or_none(
-                            soil.get("reflection_db") if soil else None, 2
+                            soil.get("reflection_db") if soil_valid else None, 2
                         ),
                     },
                     {
                         "path": "environment.bottom.reflection",
                         "value": _round_or_none(
-                            soil.get("mean_reflection_coefficient") if soil else None,
+                            soil.get("mean_reflection_coefficient")
+                            if soil_valid
+                            else None,
                             3,
                         ),
                     },
                     {
                         "path": "environment.bottom.echoSnr",
                         "value": _round_or_none(
-                            soil.get("snr_db") if soil else None, 2
+                            soil.get("snr_db") if soil_valid else None, 2
                         ),
                     },
                 ]
