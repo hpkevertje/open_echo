@@ -64,10 +64,14 @@ async def update_settings(new_settings: Settings):
     )
 
     echo_reader.update_settings(settings)
-    await output_manager.update_settings(settings)
     app.state.settings = settings
-
     app.state.settings.save()
+
+    try:
+        await output_manager.update_settings(settings)
+    except Exception as e:
+        # Keep the saved configuration even if an output cannot connect.
+        log.error(f"Failed to update outputs: {e}")
 
 
 

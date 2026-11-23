@@ -16,6 +16,16 @@ def _round_or_none(value, ndigits: int):
     return None if value is None else round(value, ndigits)
 
 
+def _host_port(address: str) -> str:
+    """Accept 'host:port' or a URL and return 'host:port' without a scheme."""
+    address = (address or "").strip()
+    for scheme in ("ws://", "wss://", "http://", "https://", "tcp://", "udp://"):
+        if address.startswith(scheme):
+            address = address[len(scheme):]
+            break
+    return address.rstrip("/")
+
+
 class OutputManager:
     def __init__(self, settings: Settings | None = None):
         self._task: asyncio.Task | None = None
@@ -44,11 +54,18 @@ class OutputManager:
             for method in new_settings.output_methods
             if method in output_methods
         ]
-        self._output_classes = [cls(self.settings) for cls in new_output_classes]
-        log.info(f"Output classes: {self._output_classes}")
 
-        for output_class in self._output_classes:
-            await output_class.start()
+        self._output_classes = []
+        for cls in new_output_classes:
+            output_class = cls(self.settings)
+            try:
+                await output_class.start()
+            except Exception as e:
+                # A missing SignalK / NMEA server must not make saving the
+                # configuration fail.  The output will retry on its own.
+                log.error(f"Failed to start {cls.__name__}: {e}")
+            self._output_classes.append(output_class)
+        log.info(f"Output classes: {self._output_classes}")
 
     async def output(self):
         """Override this in subclasses to define output behavior."""
@@ -115,11 +132,9 @@ class SignalKOutput(OutputMethod):
 
     async def start(self):
         # Use signalk_address from settings, which should be a full host:port URI
-        uri = getattr(self.settings, "signalk_address", None)
+        uri = _host_port(getattr(self.settings, "signalk_address", None))
         if not uri:
             raise ValueError("SignalK websocket address not set in settings")
-
-        uri = uri[:-1] if uri.endswith("/") else uri
 
         ws_uri = f"ws://{uri}/signalk/v1/stream?subscribe=none&token={await self.get_token()}"
         self._ws = await websockets.connect(ws_uri)
@@ -181,45 +196,63 @@ class SignalKOutput(OutputMethod):
             while self._access_request_ongoing:
                 await asyncio.sleep(0.1)
 
-        if self.settings.signalk_token is None:
-            self._access_request_ongoing = True
-            uri = getattr(self.settings, "signalk_address", None)
+        if self.settings.signalk_token is not None:
+            return self.settings.signalk_token
+
+        self._access_request_ongoing = True
+        try:
+            uri = _host_port(getattr(self.settings, "signalk_address", None))
             if not uri:
                 raise ValueError("SignalK websocket address not set in settings")
 
-            uri = uri[:-1] if uri.endswith("/") else uri
-
             access_request_uri = f"http://{uri}/signalk/v1/access/requests"
 
-            async with AsyncClient() as client:
-                access_request = await client.post(access_request_uri, json={
-                    "clientId": "f6b20288-5ecf-4daa-9a13-1594bc145abe",
-                    "description": "OpenEcho Depth Sounder"
-                })
+            async with AsyncClient(timeout=10.0) as client:
+                access_request = await client.post(
+                    access_request_uri,
+                    json={
+                        "clientId": "f6b20288-5ecf-4daa-9a13-1594bc145abe",
+                        "description": "OpenEcho Depth Sounder",
+                    },
+                )
                 access_request.raise_for_status()
 
                 poll_path = access_request.json().get("href")
                 if not poll_path:
                     raise ValueError("Failed to get poll URI from access request")
-            
-                poll_uri = f"http://{uri}{poll_path}"
 
-                # Poll until approved (this is a simple implementation; consider adding timeout/retry)
+                poll_uri = f"http://{uri}{poll_path}"
+                poll_response = access_request
                 state = access_request.json().get("state")
-                while state == "PENDING":
-                    poll_response = await client.get(poll_uri)
-                    state = poll_response.json().get("state")
+
+                # Poll until approved, but do not block the web UI forever.
+                for _ in range(60):
+                    if state != "PENDING":
+                        break
                     await asyncio.sleep(1)
-                
+                    poll_response = await client.get(poll_uri)
+                    poll_response.raise_for_status()
+                    state = poll_response.json().get("state")
+
+                if state == "PENDING":
+                    raise TimeoutError(
+                        "SignalK access request is still pending; approve it in SignalK"
+                    )
                 if state != "COMPLETED":
                     raise ValueError(f"Unknown access request state: {state}")
 
                 access_request_response = poll_response.json().get("accessRequest")
-                if access_request_response["permission"] != "APPROVED":
-                    raise ValueError(f"SignalK access request not approved: {access_request_response['permission']}")
+                if not access_request_response:
+                    raise ValueError("SignalK access request response is empty")
+                if access_request_response.get("permission") != "APPROVED":
+                    raise ValueError(
+                        "SignalK access request not approved: "
+                        f"{access_request_response.get('permission')}"
+                    )
 
                 self.settings.signalk_token = access_request_response.get("token")
                 self.settings.save()
+        finally:
             self._access_request_ongoing = False
 
         return self.settings.signalk_token
@@ -329,7 +362,7 @@ class NMEA0183Output(OutputMethod):
         self.settings = settings
 
     async def start(self):
-        address = getattr(self.settings, "nmea_address", None)
+        address = _host_port(getattr(self.settings, "nmea_address", None))
         if not address:
             raise ValueError("NMEA0183 TCP address not set in settings")
         # address should be in the form 'host:port'
