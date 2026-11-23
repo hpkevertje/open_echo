@@ -110,7 +110,12 @@ html, body {
 }
 
 #measured-depth-label {
+    flex: 0 0 240px;
+    box-sizing: border-box;
+    width: 240px;
     font: bold 32px sans-serif;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: #222;
     background: rgba(255,255,255,0.7);
     padding: 4px 12px;
@@ -159,31 +164,21 @@ html, body {
     position: relative;
     z-index: 3;
     box-sizing: border-box;
-    width: 260px;
+    width: 240px;
     margin-top: 4px;
-    padding: 8px 12px 10px;
-    border-radius: 10px;
+    padding: 7px 10px;
+    border-radius: 8px;
     background: rgba(255, 255, 255, 0.7);
     color: #222;
-    font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
-    backdrop-filter: blur(6px);
+    font: 12px sans-serif;
     user-select: none;
     outline: none;
     pointer-events: auto;
 }
 
 .sediment-panel:focus-visible {
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.16);
-}
-
-.sediment-title {
-    margin-bottom: 7px;
-    color: #555;
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    outline: 2px solid rgba(0, 0, 0, 0.4);
+    outline-offset: 2px;
 }
 
 .sediment-scale {
@@ -194,9 +189,8 @@ html, body {
 
 .sediment-end {
     flex: 0 0 30px;
-    color: #444;
-    font-size: 9px;
-    font-weight: 600;
+    color: #333;
+    font: 600 10px sans-serif;
     letter-spacing: 0.08em;
     text-align: center;
 }
@@ -229,14 +223,13 @@ html, body {
     left: 0;
     top: calc(100% + 8px);
     box-sizing: border-box;
-    width: 260px;
-    padding: 9px 11px;
-    border: 1px solid rgba(0, 0, 0, 0.14);
+    width: 240px;
+    padding: 8px 10px;
+    border: 1px solid rgba(0, 0, 0, 0.18);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+    background: rgba(255, 255, 255, 0.97);
     color: #222;
-    font-size: 11px;
+    font: 12px sans-serif;
     line-height: 1.45;
     opacity: 0;
     visibility: hidden;

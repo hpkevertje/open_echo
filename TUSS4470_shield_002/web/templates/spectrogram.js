@@ -154,7 +154,7 @@ function drawCursorOverlay(y) {
 canvas.addEventListener('mousemove', function (e) {
     const y = e.clientY - overlayCanvas.getBoundingClientRect().top;
     const depthAtCursor = yPixelToDepth(y);
-    cursorDepthLabel.textContent = `Cursor: ${depthAtCursor} m`;
+    cursorDepthLabel.textContent = `Cursor: ${depthAtCursor.toFixed(2)} m`;
     drawCursorOverlay(y);
 });
 canvas.addEventListener('mouseleave', function () {
@@ -285,7 +285,7 @@ function updateYRangeLabel() {
 // --- Axis label rendering ---
 function updateAxisLabels(depth) {
     const measuredDepthLabel = document.getElementById('measured-depth-label');
-    measuredDepthLabel.childNodes[0].nodeValue = 'Depth: ' + Math.round(depth * 100) / 100 + 'm';
+    measuredDepthLabel.childNodes[0].nodeValue = 'Depth: ' + depth.toFixed(2) + 'm';
     // const numXTicks = 5;
     // xTicks.innerHTML = '';
     // // Calculate seconds per tick based on smoothed sample rate and canvas width
