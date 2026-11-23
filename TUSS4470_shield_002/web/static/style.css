@@ -96,16 +96,25 @@ html, body {
     width: 28px;
     height: 24px;
 }
-#measured-depth-label {
+#top-bar {
     position: fixed;
     left: 80px;
     top: 16px;
+    z-index: 2;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 16px;
+    max-width: calc(100vw - 96px);
+    pointer-events: none;
+}
+
+#measured-depth-label {
     font: bold 32px sans-serif;
     color: #222;
     background: rgba(255,255,255,0.7);
     padding: 4px 12px;
     border-radius: 8px;
-    z-index: 2;
     pointer-events: none;
 }
 #cursor-depth-label {
@@ -147,30 +156,30 @@ html, body {
 
 /* Bottom-hardness meter */
 .sediment-panel {
-    position: fixed;
-    left: 92px;
-    bottom: 16px;
+    position: relative;
     z-index: 3;
     box-sizing: border-box;
     width: 260px;
+    margin-top: 4px;
     padding: 8px 12px 10px;
     border-radius: 10px;
-    background: rgba(8, 12, 16, 0.72);
-    color: #fff;
+    background: rgba(255, 255, 255, 0.7);
+    color: #222;
     font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
     backdrop-filter: blur(6px);
     user-select: none;
     outline: none;
+    pointer-events: auto;
 }
 
 .sediment-panel:focus-visible {
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75), 0 4px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.16);
 }
 
 .sediment-title {
     margin-bottom: 7px;
-    color: #b8c0c8;
+    color: #555;
     font-size: 9px;
     font-weight: 600;
     letter-spacing: 0.14em;
@@ -185,7 +194,7 @@ html, body {
 
 .sediment-end {
     flex: 0 0 30px;
-    color: #d5dbe0;
+    color: #444;
     font-size: 9px;
     font-weight: 600;
     letter-spacing: 0.08em;
@@ -198,7 +207,7 @@ html, body {
     height: 10px;
     border-radius: 999px;
     background: linear-gradient(90deg, #ff8a65 0%, #ffd54f 50%, #81c784 100%);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.16);
 }
 
 .sediment-marker {
@@ -208,9 +217,9 @@ html, body {
     width: 4px;
     height: 18px;
     border-radius: 2px;
-    background: #fff;
-    border: 1px solid rgba(0, 0, 0, 0.35);
-    box-shadow: 0 0 6px rgba(255, 255, 255, 0.85);
+    background: #1b1f23;
+    border: 1px solid rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 4px rgba(0, 0, 0, 0.4);
     transform: translate(-50%, -50%);
     transition: left 0.8s ease, opacity 0.2s ease;
 }
@@ -218,20 +227,20 @@ html, body {
 .sediment-tooltip {
     position: absolute;
     left: 0;
-    bottom: calc(100% + 8px);
+    top: calc(100% + 8px);
     box-sizing: border-box;
     width: 260px;
     padding: 9px 11px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(0, 0, 0, 0.14);
     border-radius: 8px;
-    background: rgba(8, 12, 16, 0.96);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
-    color: #e8ecef;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+    color: #222;
     font-size: 11px;
     line-height: 1.45;
     opacity: 0;
     visibility: hidden;
-    transform: translateY(4px);
+    transform: translateY(-4px);
     transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
     pointer-events: none;
 }
@@ -251,11 +260,11 @@ html, body {
 }
 
 .sediment-tooltip-line {
-    color: #b9c2c9;
+    color: #444;
 }
 
 .sediment-tooltip-time {
     margin-top: 4px;
-    color: #7f8a93;
+    color: #777;
     font-size: 10px;
 }

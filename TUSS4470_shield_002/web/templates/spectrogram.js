@@ -20,10 +20,10 @@ let maxValue = 0;
 let ctx, imageData;
 
 const SEDIMENT_COLORS = {
-    hard:    "#4fc3f7",   // light blue
-    mixed:   "#ffb74d",   // amber
-    soft:    "#a5d6a7",   // green
-    unknown: "#9e9e9e",   // grey
+    hard:    "#1565c0",   // blue
+    mixed:   "#e65100",   // burnt orange
+    soft:    "#2e7d32",   // green
+    unknown: "#555555",   // grey
 };
 
 class RunningStats {
@@ -342,9 +342,13 @@ function sedimentPosition(s) {
     return 0.5;
 }
 
-function sedimentName(s) {
+function soilTypeName(s) {
     const name = s.soil_type || s.hardness_label || "unknown";
     return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+function sedimentName(s) {
+    return s.measurement_valid === false ? "No valid measurement" : soilTypeName(s);
 }
 
 function renderSediment(s) {
@@ -355,14 +359,18 @@ function renderSediment(s) {
 
     sedimentPanel.style.display = "block";
 
+    const valid = s.measurement_valid !== false;
     const pos = sedimentPosition(s);
     const pct = pos === null ? 50 : Math.round(pos * 100);
     sedimentMarker.style.left = `${pct}%`;
-    sedimentMarker.style.opacity = pos === null ? "0.35" : "1";
+    sedimentMarker.style.opacity = valid ? (pos === null ? "0.35" : "1") : "0.55";
 
     const db = Number.isFinite(s.reflection_db) ? `${s.reflection_db.toFixed(1)} dB` : "no value";
     sedimentPanel.setAttribute("aria-valuenow", String(pct));
-    sedimentPanel.setAttribute("aria-valuetext", `${sedimentName(s)}, ${db}`);
+    sedimentPanel.setAttribute(
+        "aria-valuetext",
+        valid ? `${sedimentName(s)}, ${db}` : "No valid measurement"
+    );
 }
 
 function sedimentTooltipLine(text) {
@@ -380,30 +388,45 @@ function renderSedimentTooltip(s) {
         return;
     }
 
+    const valid = s.measurement_valid !== false;
+
     const title = document.createElement("div");
     title.className = "sediment-tooltip-title";
     title.textContent = sedimentName(s);
-    if (SEDIMENT_COLORS[s.hardness_label]) {
-        title.style.color = SEDIMENT_COLORS[s.hardness_label];
-    }
+    title.style.color = valid
+        ? (SEDIMENT_COLORS[s.hardness_label] || SEDIMENT_COLORS.unknown)
+        : "#666";
     sedimentTooltip.append(title);
 
-    if (Number.isFinite(s.mean_reflection_coefficient) && Number.isFinite(s.reflection_db)) {
+    if (!valid) {
+        if (Number.isFinite(s.mean_reflection_coefficient) && Number.isFinite(s.reflection_db)) {
+            sedimentTooltip.append(
+                sedimentTooltipLine(
+                    `Holding last valid: ${soilTypeName(s)} · R ${s.mean_reflection_coefficient.toFixed(2)} · ${s.reflection_db.toFixed(1)} dB`
+                )
+            );
+        }
         sedimentTooltip.append(
-            sedimentTooltipLine(
-                `R ${s.mean_reflection_coefficient.toFixed(2)} · ${s.reflection_db.toFixed(1)} dB`
-            )
+            sedimentTooltipLine("No usable second echo in the current ping.")
         );
-    }
+    } else {
+        if (Number.isFinite(s.mean_reflection_coefficient) && Number.isFinite(s.reflection_db)) {
+            sedimentTooltip.append(
+                sedimentTooltipLine(
+                    `R ${s.mean_reflection_coefficient.toFixed(2)} · ${s.reflection_db.toFixed(1)} dB`
+                )
+            );
+        }
 
-    if (Number.isFinite(s.snr_db)) {
-        sedimentTooltip.append(
-            sedimentTooltipLine(
-                `2nd echo ${s.snr_db.toFixed(1)} dB · ${s.confidence} confidence`
-            )
-        );
-    } else if (s.confidence) {
-        sedimentTooltip.append(sedimentTooltipLine(`Confidence: ${s.confidence}`));
+        if (Number.isFinite(s.snr_db)) {
+            sedimentTooltip.append(
+                sedimentTooltipLine(
+                    `2nd echo ${s.snr_db.toFixed(1)} dB · ${s.confidence} confidence`
+                )
+            );
+        } else if (s.confidence) {
+            sedimentTooltip.append(sedimentTooltipLine(`Confidence: ${s.confidence}`));
+        }
     }
 
     const time = document.createElement("div");

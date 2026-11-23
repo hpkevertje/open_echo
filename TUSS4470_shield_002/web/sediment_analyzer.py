@@ -50,7 +50,6 @@ Usage
 """
 
 import math
-from collections import deque
 from dataclasses import asdict, dataclass
 from typing import Optional
 
@@ -78,6 +77,15 @@ SMOOTH_KERNEL: int = 5
 # Reflection-coefficient thresholds (20*log10(R), dB)
 THRESHOLD_HARD_DB: float = -10.0
 THRESHOLD_MIXED_DB: float = -18.0
+
+# Asymmetric smoothing: high-confidence pings move the meter quickly, low
+# confidence pings move it slowly. A run of low-confidence pings is ignored
+# entirely while the last accepted estimate was medium/high.
+ALPHA_LOW: float = 0.10
+ALPHA_MEDIUM: float = 0.35
+ALPHA_HIGH: float = 0.70
+LOW_STREAK_IGNORE: int = 3
+LOW_STREAK_ALPHA: float = 0.05
 
 
 # -- data class ---------------------------------------------------------------
@@ -107,6 +115,7 @@ class SedimentResult:
     soil_class: int                 # 0 rock .. 4 mud, 9 unknown
     confidence: str                 # "high" | "medium" | "low"
     description: str                # human-readable one-liner
+    measurement_valid: bool = True  # False when there is no usable second echo
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -162,6 +171,7 @@ def _unknown(primary_index: int, description: str) -> SedimentResult:
         soil_class=9,
         confidence="low",
         description=description,
+        measurement_valid=False,
     )
 
 
@@ -177,19 +187,18 @@ def _classify(
         if range_limited:
             return (
                 "unknown",
-                "unknown",
+                "no valid measurement",
                 9,
                 "low",
-                "Second echo falls outside the captured range - move to shallower "
-                "water or increase the number of samples.",
+                "No valid measurement: the second echo falls outside the captured "
+                "range. Move to shallower water or increase the number of samples.",
             )
         return (
-            "soft",
-            "mud / soft silt",
-            4,
+            "unknown",
+            "no valid measurement",
+            9,
             "low",
-            "No second echo above the noise floor. This is consistent with a soft, "
-            "absorbing bottom (or a rough/steep bottom). Average several pings to confirm.",
+            "No valid measurement: no usable second echo above the noise floor.",
         )
 
     # Reflection coefficients from the literature (normal incidence, 40 kHz):
@@ -220,49 +229,123 @@ def _classify(
         confidence = "high"
 
     r_lin = 10.0 ** (mean_r_db / 20.0)
+    echo_text = (
+        f"second echo {snr_db:.1f} dB above noise"
+        if snr_db is not None
+        else "no second echo"
+    )
     scope = (
         "Single-ping estimate; average 20-50 pings for a stable value."
         if n_pings <= 1
-        else f"Median of the last {n_pings} pings."
+        else f"Smoothed over {n_pings} pings."
     )
     description = (
         f"{soil_type} - R={r_lin:.2f} ({mean_r_db:.1f} dB), "
-        f"second echo {snr_db:.1f} dB above noise. {scope}"
+        f"{echo_text}. {scope}"
     )
     return hardness, soil_type, soil_class, confidence, description
 
 
 class SoilFilter:
     """
-    Median filter over recent pings.
+    Asymmetric smoothing for the bottom-hardness estimate.
 
-    A single ping gives a noisy R (the second echo is only a few dB above the
-    noise floor), so the reported bottom type can jump between classes.  Keep
-    a short history and report the median reflection coefficient instead.
+    - A low-confidence ping is ignored for a few pings while the last accepted
+      estimate was medium/high, so a single weak echo cannot flip the meter.
+    - If low-confidence pings persist, the estimate drifts slowly toward them.
+    - Medium/high-confidence pings move the estimate quickly.
+    - A ping without a usable second echo is reported as "no valid
+      measurement" and holds the last valid slider position instead of
+      jumping to "soft".
     """
 
-    def __init__(self, window: int = 30):
-        self.window = max(1, int(window))
-        self._history: deque[float] = deque(maxlen=self.window)
+    def __init__(
+        self,
+        alpha_low: float = ALPHA_LOW,
+        alpha_medium: float = ALPHA_MEDIUM,
+        alpha_high: float = ALPHA_HIGH,
+        low_streak_ignore: int = LOW_STREAK_IGNORE,
+        low_streak_alpha: float = LOW_STREAK_ALPHA,
+    ):
+        self.alpha_low = alpha_low
+        self.alpha_medium = alpha_medium
+        self.alpha_high = alpha_high
+        self.low_streak_ignore = low_streak_ignore
+        self.low_streak_alpha = low_streak_alpha
+
+        self._smoothed_db: Optional[float] = None
+        self._last_confidence = "low"
+        self._last_valid: Optional[SedimentResult] = None
+        self._low_streak = 0
+        self._pings = 0
 
     def reset(self) -> None:
-        self._history.clear()
+        self._smoothed_db = None
+        self._last_confidence = "low"
+        self._last_valid = None
+        self._low_streak = 0
+        self._pings = 0
+
+    def _hold_last_valid(self, result: SedimentResult) -> SedimentResult:
+        """Report 'no valid measurement' without moving the slider."""
+        if self._last_valid is None:
+            return result
+
+        last = self._last_valid
+        result.reflection_db = last.reflection_db
+        result.mean_reflection_coefficient = last.mean_reflection_coefficient
+        result.reflection_coefficients = list(last.reflection_coefficients)
+        result.multiple_indices = list(last.multiple_indices)
+        result.multiple_amplitudes = list(last.multiple_amplitudes)
+        result.multiple_found = list(last.multiple_found)
+        result.hardness_label = last.hardness_label
+        result.soil_type = last.soil_type
+        result.soil_class = last.soil_class
+        result.snr_db = None
+        result.confidence = "low"
+        result.measurement_valid = False
+        result.description = (
+            "No valid measurement in the current ping; holding the last valid "
+            "estimate."
+        )
+        return result
 
     def update(self, result: SedimentResult) -> SedimentResult:
-        """Update the history and return the (possibly reclassified) result."""
-        if result.reflection_db is None:
-            return result
+        """Update the filter and return the result to display."""
+        if not result.measurement_valid or result.reflection_db is None:
+            return self._hold_last_valid(result)
 
-        self._history.append(float(result.reflection_db))
-        if len(self._history) == 1:
-            return result
+        confidence = result.confidence
 
-        smoothed_db = float(np.median(self._history))
-        hardness, soil_type, soil_class, confidence, description = _classify(
+        # Ignore isolated low-confidence pings while the meter is stable.
+        if confidence == "low" and self._last_confidence in ("medium", "high"):
+            self._low_streak += 1
+            if self._low_streak <= self.low_streak_ignore:
+                return self._last_valid or result
+            alpha = self.low_streak_alpha
+        else:
+            self._low_streak = 0
+            alpha = {
+                "high": self.alpha_high,
+                "medium": self.alpha_medium,
+                "low": self.alpha_low,
+            }.get(confidence, self.alpha_low)
+
+        target_db = float(result.reflection_db)
+        if self._smoothed_db is None:
+            self._smoothed_db = target_db
+        else:
+            self._smoothed_db += alpha * (target_db - self._smoothed_db)
+
+        self._pings += 1
+        self._last_confidence = confidence
+
+        smoothed_db = self._smoothed_db
+        hardness, soil_type, soil_class, new_confidence, description = _classify(
             smoothed_db,
             result.snr_db,
             range_limited=False,
-            n_pings=len(self._history),
+            n_pings=self._pings,
         )
 
         result.reflection_db = smoothed_db
@@ -271,8 +354,11 @@ class SoilFilter:
         result.hardness_label = hardness
         result.soil_type = soil_type
         result.soil_class = soil_class
-        result.confidence = confidence
+        result.confidence = new_confidence
         result.description = description
+        result.measurement_valid = True
+
+        self._last_valid = result
         return result
 
 
@@ -404,4 +490,5 @@ def analyze(
         soil_class=soil_class,
         confidence=confidence,
         description=description,
+        measurement_valid=reflection_db is not None,
     )

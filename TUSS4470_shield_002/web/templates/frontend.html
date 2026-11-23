@@ -25,30 +25,32 @@
     </div>
   </div>
 
-  <div id="measured-depth-label">
-    Depth: 0m
-    <div id="cursor-depth-label">Cursor: -- m</div>
+  <div id="top-bar">
+    <div id="measured-depth-label">
+      Depth: 0m
+      <div id="cursor-depth-label">Cursor: -- m</div>
+    </div>
+
+    <div id="sediment-panel" class="sediment-panel" role="meter"
+         aria-label="Bottom hardness" aria-valuemin="0" aria-valuemax="100"
+         aria-valuenow="50" aria-valuetext="Unknown" tabindex="0"
+         style="display:none;">
+      <div class="sediment-title">Bottom hardness</div>
+      <div class="sediment-scale">
+        <span class="sediment-end">HARD</span>
+        <div class="sediment-track">
+          <div id="sediment-marker" class="sediment-marker"></div>
+        </div>
+        <span class="sediment-end">SOFT</span>
+      </div>
+      <div id="sediment-tooltip" class="sediment-tooltip" role="tooltip"></div>
+    </div>
   </div>
 
   <!-- <div id="x-axis-labels">
     <div id="x-ticks"></div>
     <div class="seconds-label">Seconds</div>
   </div> -->
-
-  <div id="sediment-panel" class="sediment-panel" role="meter"
-       aria-label="Bottom hardness" aria-valuemin="0" aria-valuemax="100"
-       aria-valuenow="50" aria-valuetext="Unknown" tabindex="0"
-       style="display:none;">
-    <div class="sediment-title">Bottom hardness</div>
-    <div class="sediment-scale">
-      <span class="sediment-end">HARD</span>
-      <div class="sediment-track">
-        <div id="sediment-marker" class="sediment-marker"></div>
-      </div>
-      <span class="sediment-end">SOFT</span>
-    </div>
-    <div id="sediment-tooltip" class="sediment-tooltip" role="tooltip"></div>
-  </div>
 
   <script src="/static/js-colormaps.js"></script>
   <script>{% include 'spectrogram.js' %}</script>
