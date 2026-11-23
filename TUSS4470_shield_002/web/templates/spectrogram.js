@@ -257,7 +257,11 @@ ws.onmessage = (event) => {
     updateSampleResolution(data.resolution);
     updateYRange();
     insertColumn(data.spectrogram, data.measured_depth);
-    updateSediment(data);   
+
+    if (data.sediment) {
+        latestSediment = data.sediment;
+        maybeRenderSediment();
+    }
 };
 ws.onerror = (e) => console.error('WebSocket error:', e);
 ws.onclose = () => console.warn('WebSocket closed');
@@ -314,45 +318,110 @@ function updateAxisLabels(depth) {
     }
 }
 
-function updateSediment(data) {
-    const box = document.getElementById("sediment-box");
-    const s = data.sediment;
-    if (!s) { box.style.display = "none"; return; }
+// --- Bottom-hardness meter ---
+const sedimentPanel = document.getElementById("sediment-panel");
+const sedimentMarker = document.getElementById("sediment-marker");
+const sedimentTooltip = document.getElementById("sediment-tooltip");
 
-    box.style.display = "block";
+// -8 dB is the rock / gravel boundary, -24 dB is the silt / mud boundary.
+const HARDNESS_HARD_DB = -8;
+const HARDNESS_SOFT_DB = -24;
+const SEDIMENT_RENDER_INTERVAL_MS = 1000;
 
-    // Soil type + confidence badge
-    const color = SEDIMENT_COLORS[s.hardness_label] ?? "#fff";
-    const label = document.getElementById("sediment-label");
-    label.replaceChildren();
+let latestSediment = null;
+let lastSedimentRender = -Infinity;
 
-    const typeSpan = document.createElement("span");
-    typeSpan.style.color = color;
-    typeSpan.style.fontWeight = "bold";
-    typeSpan.textContent = (s.soil_type || s.hardness_label || "unknown").toUpperCase();
+function sedimentPosition(s) {
+    if (!s) return null;
+    if (typeof s.reflection_db === "number" && Number.isFinite(s.reflection_db)) {
+        const t = (HARDNESS_HARD_DB - s.reflection_db) / (HARDNESS_HARD_DB - HARDNESS_SOFT_DB);
+        return Math.min(1, Math.max(0, t));
+    }
+    if (s.hardness_label === "soft") return 0.95;
+    if (s.hardness_label === "hard") return 0.05;
+    return 0.5;
+}
 
-    const confidenceSpan = document.createElement("span");
-    confidenceSpan.style.color = "#888";
-    confidenceSpan.style.fontSize = "10px";
-    confidenceSpan.textContent = ` [${s.confidence}]`;
+function sedimentName(s) {
+    const name = s.soil_type || s.hardness_label || "unknown";
+    return name.charAt(0).toUpperCase() + name.slice(1);
+}
 
-    label.append(typeSpan, confidenceSpan);
-
-    // Reflection coefficient in linear form and dB, plus second-echo SNR
-    if (s.reflection_db !== null && s.reflection_db !== undefined) {
-        const r = s.mean_reflection_coefficient;
-        const snr = s.snr_db;
-        document.getElementById("sediment-r").textContent =
-            `R: ${r.toFixed(2)} (${s.reflection_db.toFixed(1)} dB)` +
-            (snr !== null && snr !== undefined
-                ? `   echo SNR ${snr.toFixed(1)} dB`
-                : "");
-    } else {
-        document.getElementById("sediment-r").textContent = "R: n/a (no second echo)";
+function renderSediment(s) {
+    if (!s) {
+        sedimentPanel.style.display = "none";
+        return;
     }
 
-    document.getElementById("sediment-desc").textContent = s.description || "";
+    sedimentPanel.style.display = "block";
+
+    const pos = sedimentPosition(s);
+    const pct = pos === null ? 50 : Math.round(pos * 100);
+    sedimentMarker.style.left = `${pct}%`;
+    sedimentMarker.style.opacity = pos === null ? "0.35" : "1";
+
+    const db = Number.isFinite(s.reflection_db) ? `${s.reflection_db.toFixed(1)} dB` : "no value";
+    sedimentPanel.setAttribute("aria-valuenow", String(pct));
+    sedimentPanel.setAttribute("aria-valuetext", `${sedimentName(s)}, ${db}`);
 }
+
+function sedimentTooltipLine(text) {
+    const line = document.createElement("div");
+    line.className = "sediment-tooltip-line";
+    line.textContent = text;
+    return line;
+}
+
+function renderSedimentTooltip(s) {
+    sedimentTooltip.replaceChildren();
+
+    if (!s) {
+        sedimentTooltip.textContent = "No sediment estimate yet.";
+        return;
+    }
+
+    const title = document.createElement("div");
+    title.className = "sediment-tooltip-title";
+    title.textContent = sedimentName(s);
+    if (SEDIMENT_COLORS[s.hardness_label]) {
+        title.style.color = SEDIMENT_COLORS[s.hardness_label];
+    }
+    sedimentTooltip.append(title);
+
+    if (Number.isFinite(s.mean_reflection_coefficient) && Number.isFinite(s.reflection_db)) {
+        sedimentTooltip.append(
+            sedimentTooltipLine(
+                `R ${s.mean_reflection_coefficient.toFixed(2)} · ${s.reflection_db.toFixed(1)} dB`
+            )
+        );
+    }
+
+    if (Number.isFinite(s.snr_db)) {
+        sedimentTooltip.append(
+            sedimentTooltipLine(
+                `2nd echo ${s.snr_db.toFixed(1)} dB · ${s.confidence} confidence`
+            )
+        );
+    } else if (s.confidence) {
+        sedimentTooltip.append(sedimentTooltipLine(`Confidence: ${s.confidence}`));
+    }
+
+    const time = document.createElement("div");
+    time.className = "sediment-tooltip-time";
+    time.textContent = `Snapshot ${new Date().toLocaleTimeString()}`;
+    sedimentTooltip.append(time);
+}
+
+function maybeRenderSediment() {
+    const now = performance.now();
+    if (now - lastSedimentRender < SEDIMENT_RENDER_INTERVAL_MS) return;
+    lastSedimentRender = now;
+    renderSediment(latestSediment);
+}
+
+// Freeze the tooltip value at the moment the pointer/focus enters the meter.
+sedimentPanel.addEventListener("mouseenter", () => renderSedimentTooltip(latestSediment));
+sedimentPanel.addEventListener("focus", () => renderSedimentTooltip(latestSediment));
 
 // --- Zoom controls ---
 document.getElementById('zoom-in').addEventListener('click', function () {

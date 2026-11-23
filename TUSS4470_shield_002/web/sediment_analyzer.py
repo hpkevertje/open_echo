@@ -241,7 +241,7 @@ class SoilFilter:
     a short history and report the median reflection coefficient instead.
     """
 
-    def __init__(self, window: int = 15):
+    def __init__(self, window: int = 30):
         self.window = max(1, int(window))
         self._history: deque[float] = deque(maxlen=self.window)
 

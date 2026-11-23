@@ -1,7 +1,11 @@
+import os
 from enum import StrEnum
 from typing import Annotated
 from echo import ConnectionTypeEnum
 from pydantic import BaseModel, Field, field_validator, PlainSerializer
+
+
+SETTINGS_FILE = os.environ.get("OPENECHO_SETTINGS", ".settings.json")
 
 
 class Medium(StrEnum):
@@ -81,13 +85,15 @@ class Settings(BaseModel):
             methods.append("nmea0183")
         return methods
 
-    def save(self, filename=".settings.json"):
+    def save(self, filename: str | None = None):
+        filename = filename or SETTINGS_FILE
         with open(filename, "w", encoding="utf-8") as f:
             f.write(self.model_dump_json(indent=2))
 
     @classmethod
-    def load(cls, filename=".settings.json"):
+    def load(cls, filename: str | None = None):
+        filename = filename or SETTINGS_FILE
         with open(filename, "r", encoding="utf-8") as f:
             data = f.read()
-        
+
         return cls.model_validate_json(data)
