@@ -110,9 +110,9 @@ html, body {
 }
 
 #measured-depth-label {
-    flex: 0 0 240px;
+    flex: 0 0 260px;
     box-sizing: border-box;
-    width: 240px;
+    width: 260px;
     font: bold 32px sans-serif;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
