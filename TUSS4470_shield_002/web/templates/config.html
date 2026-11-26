@@ -150,6 +150,42 @@
                 </select>
             </label>
         </details>
+        <details style="margin-bottom:18px;">
+            <summary style="font-size:18px; font-weight:500; margin-bottom:12px; cursor:pointer;">Diagnostic Recorder</summary>
+            <label style="display:flex; align-items:center; margin-bottom:8px;">
+                <input type="checkbox" name="recording_enabled" style="width:auto; margin-right:8px;" {% if settings.recording_enabled %}checked{% endif %}>
+                Enable rolling ping recording
+            </label>
+            <div style="font-size:12px; color:#aaa; margin:0 0 10px 28px;">
+                Records gzipped JSONL, including the full spectrogram. Runs in the server, so it continues with the browser closed.
+                At 5 Hz this is roughly 14 MB/hour; at 10 Hz roughly 27 MB/hour.
+            </div>
+            <label>
+                Sample rate (Hz)
+                <input name="recording_hz" type="number" min="0.5" max="10" step="0.5" required value="{{ settings.recording_hz|default(5) }}">
+            </label>
+            <label>
+                Maximum storage (MB)
+                <input name="recording_max_mb" type="number" min="100" step="100" required value="{{ settings.recording_max_mb|default(1024) }}">
+            </label>
+            <label>
+                Maximum duration (hours, 0 = no limit)
+                <input name="recording_duration_hours" type="number" min="0" step="0.5" required value="{{ settings.recording_duration_hours|default(0) }}">
+            </label>
+            <label>
+                Recording directory
+                <input name="recording_dir" type="text" required value="{{ settings.recording_dir|default('') }}">
+            </label>
+            <div style="font-size:12px; color:#aaa; margin-top:8px;">
+                Status:
+                {% if recorder_status.enabled %}recording{% else %}stopped{% endif %}
+                {% if recorder_status.current_file %}<br>Current file: {{ recorder_status.current_file }}{% endif %}
+                <br>{{ recorder_status.recorded }} pings recorded, {{ recorder_status.used_mb }} / {{ recorder_status.max_mb }} MB used
+                {% if recorder_status.stop_at_iso %}<br>Stops at {{ recorder_status.stop_at_iso }} UTC{% endif %}
+                {% if recorder_status.error %}<br><span style="color:#e57373">Error: {{ recorder_status.error }}</span>{% endif %}
+            </div>
+            <p><a href="/recordings" target="_blank">Open recordings / download</a></p>
+        </details>
         <button type="submit">Save</button>
     </form>
     <script>

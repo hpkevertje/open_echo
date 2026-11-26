@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>OpenEcho recordings</title>
+  <style>
+    body { font: 14px sans-serif; margin: 24px; color: #222; background: #fafafa; }
+    h1 { font-size: 22px; }
+    table { border-collapse: collapse; width: 100%; max-width: 900px; background: #fff; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #ddd; }
+    th { background: #eee; }
+    a { color: #1565c0; }
+    .muted { color: #666; }
+    .active { color: #b26a00; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <h1>OpenEcho recordings</h1>
+  <p class="muted">
+    {{ status.recorded }} pings recorded in this process,
+    {{ status.used_mb }} / {{ status.max_mb }} MB used in {{ status.directory }}.
+    {% if status.enabled %}<span class="active">Recording is running.</span>{% else %}Recorder is stopped.{% endif %}
+  </p>
+  {% if files %}
+  <table>
+    <thead>
+      <tr><th>File</th><th>Size</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+      {% for f in files %}
+      <tr>
+        <td><a href="/recordings/{{ f.name }}">{{ f.name }}</a></td>
+        <td>{{ f.size_mb }} MB</td>
+        <td>{% if f.active %}<span class="active">active</span>{% else %}closed{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No recordings yet.</p>
+  {% endif %}
+  <p><a href="/config">Back to configuration</a></p>
+</body>
+</html>

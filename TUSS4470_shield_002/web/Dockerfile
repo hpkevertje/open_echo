@@ -3,7 +3,8 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    OPENECHO_SETTINGS=/data/settings.json
+    OPENECHO_SETTINGS=/data/settings.json \
+    OPENECHO_RECORDINGS=/data/recordings
 
 WORKDIR /app
 
@@ -11,7 +12,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py depth_output.py echo.py depth_tracker.py sediment_analyzer.py settings.py ./
+COPY app.py depth_output.py echo.py depth_tracker.py recorder.py sediment_analyzer.py settings.py ./
 COPY templates ./templates
 COPY static ./static
 

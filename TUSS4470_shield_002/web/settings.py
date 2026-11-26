@@ -1,11 +1,16 @@
 import os
 from enum import StrEnum
+from pathlib import Path
 from typing import Annotated
 from echo import ConnectionTypeEnum
 from pydantic import BaseModel, Field, field_validator, PlainSerializer
 
 
 SETTINGS_FILE = os.environ.get("OPENECHO_SETTINGS", ".settings.json")
+RECORDING_DIR_DEFAULT = os.environ.get(
+    "OPENECHO_RECORDINGS",
+    str(Path(SETTINGS_FILE).expanduser().resolve().parent / "recordings"),
+)
 
 
 class Medium(StrEnum):
@@ -42,6 +47,16 @@ class Settings(BaseModel):
     nmea_address: str = "localhost:10110"
     nmea_offset: NMEAOffset | None = None
     signalk_token: str | None = None
+
+    # Diagnostic ping recorder
+    recording_enabled: bool = False
+    recording_hz: float = Field(default=5.0, gt=0, le=10)
+    recording_dir: str = RECORDING_DIR_DEFAULT
+    recording_max_mb: float = Field(default=1024.0, gt=0)
+    recording_duration_hours: float = Field(default=0.0, ge=0)
+    recording_segment_minutes: float = Field(default=30.0, gt=0)
+    recording_started_at: float | None = None
+    recording_stop_at: float | None = None
 
     @field_validator("connection_type", mode="before")
     def parse_connection_type(cls, v):

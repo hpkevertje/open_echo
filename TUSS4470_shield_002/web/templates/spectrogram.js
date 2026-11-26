@@ -258,6 +258,8 @@ const ws = new WebSocket('ws://' + window.location.host + '/ws');
 ws.onmessage = (event) => {
     // updateSampleRate();
     const data = JSON.parse(event.data);
+    const recordingIndicator = document.getElementById('recording-indicator');
+    recordingIndicator.style.display = data.recording ? 'flex' : 'none';
     if (Number.isFinite(data.measured_depth) && data.measured_depth > maxMeasuredDepth) {
         maxMeasuredDepth = data.measured_depth;
     }
